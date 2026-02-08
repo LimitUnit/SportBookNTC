@@ -12,8 +12,6 @@ import threading
 app = Flask(__name__)
 # Глобальная переменная для бота
 application = None
-# Токен бота
-TOKEN = "8266158494:AAF-VfMR9nJWC5UIAfkZCnCurfrQmoJTXsY"
 
 # Файлы для сохранения данных
 BOOKINGS_FILE = "bookings.json"
@@ -1617,7 +1615,7 @@ def main():
         global application
         application = (
             Application.builder()
-            .token(TOKEN)
+            .token(TELEGRAM_TOKEN)
             .pool_timeout(30)
             .read_timeout(30)
             .write_timeout(30)
@@ -1711,4 +1709,5 @@ def get_webhook_info():
         return f"Error: {e}"
 
 if __name__ == "__main__":
+
     main()

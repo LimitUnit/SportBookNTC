@@ -6,7 +6,7 @@ import os
 import pandas as pd
 
 # ЗАМЕНИТЕ НА ВАШ ТОКЕН ОТ @BotFather!
-TOKEN = "8242070126:AAFBa_2bkZucqwk-nAhkzX3FNMOpsWeSXZ0"
+TOKEN = ""
 
 # Файлы для сохранения данных
 BOOKINGS_FILE = "bookings.json"
@@ -1030,4 +1030,5 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 
 if __name__ == "__main__":
+
     main()

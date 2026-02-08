@@ -1,120 +1,260 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+import logging
 import datetime
 import json
 import os
 import pandas as pd
+from flask import Flask, request, jsonify
+import threading
 
-# ЗАМЕНИТЕ НА ВАШ ТОКЕН ОТ @BotFather!
-TOKEN = ""
+# Создаем Flask приложение
+app = Flask(__name__)
+# Глобальная переменная для бота
+application = None
+# Токен бота
+TOKEN = "8266158494:AAF-VfMR9nJWC5UIAfkZCnCurfrQmoJTXsY"
 
 # Файлы для сохранения данных
 BOOKINGS_FILE = "bookings.json"
 OCCUPIED_SLOTS_FILE = "occupied_slots.json"
-RULES_FILE = "rules.txt"  # Файл с правилами
+SCHEDULE_FILE = "inDATA.xlsx"
 
-# Данные расписания спортивного зала
-SCHEDULE_DATA = {
-    'День недели': ['Понедельник', 'Понедельник', 'Понедельник',
-                    'Вторник', 'Вторник', 'Вторник', 'Вторник',
-                    'Среда', 'Среда', 'Среда',
-                    'Четверг', 'Четверг', 'Четверг', 'Четверг',
-                    'Пятница', 'Пятница', 'Пятница', 'Пятница',
-                    'Суббота', 'Суббота', 'Суббота', 'Суббота', 'Суббота', 'Суббота', 'Суббота', 'Суббота',
-                    'Воскресенье', 'Воскресенье', 'Воскресенье', 'Воскресенье', 'Воскресенье', 'Воскресенье',
-                    'Воскресенье', 'Воскресенье'],
-    'Начало': ['07:00:00', '18:30:00', '20:00:00',
-               '07:30:00', '18:15:00', '19:15:00', '20:45:00',
-               '07:00:00', '18:30:00', '20:00:00',
-               '07:30:00', '18:15:00', '19:15:00', '20:45:00',
-               '07:00:00', '17:00:00', '18:30:00', '20:00:00',
-               '08:00:00', '10:00:00', '12:00:00', '14:00:00', '16:00:00', '17:30:00', '19:00:00', '21:00:00',
-               '08:00:00', '10:00:00', '12:00:00', '14:00:00', '16:00:00', '18:00:00', '19:30:00', '21:30:00'],
-    'Окончание': ['08:30:00', '20:00:00', '21:30:00',
-                  '08:30:00', '19:15:00', '20:45:00', '22:45:00',
-                  '08:30:00', '20:00:00', '21:30:00',
-                  '08:30:00', '19:15:00', '20:45:00', '22:15:00',
-                  '08:30:00', '18:30:00', '20:00:00', '22:00:00',
-                  '10:00:00', '12:00:00', '14:00:00', '16:00:00', '17:30:00', '19:00:00', '21:00:00', '22:30:00',
-                  '10:00:00', '12:00:00', '14:00:00', '16:00:00', '18:00:00', '19:30:00', '21:30:00', '22:30:00'],
-    'Вид спорта': ['Теннис (большой)', 'Волейбол (жен)', 'Мини-футбол',
-                   'Йога', 'Фитнес', 'Волейбол (муж)', 'Теннис (большой)',
-                   'Теннис (большой)', 'Баскетбол', 'Теннис (большой)',
-                   'Йога', 'Фитнес', 'Мини-футбол', 'Волейбол (муж)',
-                   'Теннис (большой)', 'Баскетбол', 'Волейбол (жен)', 'Теннис (большой)',
-                   'Теннис (большой)', 'Бадминтон', 'Баскетбол', 'По резерву', 'По резерву', 'По резерву',
-                   'Теннис (большой)', 'По резерву',
-                   'Баскетбол', 'Теннис (большой)', 'По резерву', 'По резерву', 'Баскетбол', 'Мини-футбол',
-                   'По резерву', 'По резерву'],
-    'Ответственное лицо': ['Быбин Петр / Щуклин Алексей', 'Сазонова Анна/Чернявских Мария',
-                           'Кочетков Павел/Сазонов Николай',
-                           'Подшивалов Андрей/Горобец Вячеслав', 'Яковлева Ксения',
-                           'Перевалов Леонид/Листойкин Дмитрий', 'Быбин Петр/Щуклин Алексей',
-                           'Быбин Петр/Щуклин Алексей', 'Квартников Дмитрий/Туляков Ильгиз',
-                           'Быбин Петр/Щуклин Алексей',
-                           'Подшивалов Андрей/Горобец Вячеслав', 'Яковлева Ксения', 'Кочетков Павел/Сазонов Николай',
-                           'Перевалов Леонид/Листойкин Дмитрий',
-                           'Быбин Петр/Щуклин Алексей', 'Квартников Дмитрий/Туляков Ильгиз',
-                           'Сазонова Анна/Чернявских Мария', 'Быбин Петр/Щуклин Алексей',
-                           'Быбин Петр/Щуклин Алексей', 'Гуляев Денис/Казанцев Глеб',
-                           'Квартников Дмитрий/Туляков Ильгиз', '', '', '', 'Быбин Петр/Щуклин Алексей', '',
-                           'Квартников Дмитрий/Туляков Ильгиз', 'Быбин Петр/Щуклин Алексей', '', '',
-                           'Квартников Дмитрий/Туляков Ильгиз', 'Кочетков Павел/Сазонов Николай', '', ''],
-    'Имя пользователя': ['@PetrBybin | @Alexey_Shchuklin', '@username | @username', '@username | @username',
-                         '@AndreyP_Yoga | @slava_gorobets', '@username | @username', '@username | @username',
-                         '@PetrBybin | @Alexey_Shchuklin',
-                         '@PetrBybin | @Alexey_Shchuklin', '@username | @username', '@PetrBybin | @Alexey_Shchuklin',
-                         '@AndreyP_Yoga | @slava_gorobets', '@username | @username', '@username | @username',
-                         '@username | @Dmitry_Listoykin',
-                         '@PetrBybin | @Alexey_Shchuklin', '@username | @username', '@username | @username',
-                         '@PetrBybin | @Alexey_Shchuklin',
-                         '@PetrBybin | @Alexey_Shchuklin', '@username | @username', '@username | @username', '', '', '',
-                         '@PetrBybin | @Alexey_Shchuklin', '',
-                         '@username | @username', '@PetrBybin | @Alexey_Shchuklin', '', '', '@username | @username',
-                         '@username | @username', '', '']
-}
+# Настройка логирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
 
-# Загрузка правил из файла
+# Загрузка правил из файла Excel
 def load_rules():
-    """Загружает правила из файла rules.txt"""
+    """Загружает правила из вкладки rules в Excel файле"""
     try:
-        if os.path.exists(RULES_FILE):
-            with open(RULES_FILE, 'r', encoding='utf-8') as f:
-                rules_text = f.read().strip()
-                if rules_text:
-                    return rules_text
-                else:
-                    print("Файл rules.txt пуст")
-        else:
-            print(f"Файл {RULES_FILE} не найден")
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        schedule_path = os.path.join(current_dir, SCHEDULE_FILE)
+
+        if os.path.exists(schedule_path):
+            df_rules = pd.read_excel(schedule_path, sheet_name='rules')
+
+            # Объединяем все строки в один текст с разделителями
+            rules_text = "📋 <b>ПРАВИЛА ИСПОЛЬЗОВАНИЯ СПОРТИВНОГО ЗАЛА НТЦ</b>\n\n"
+
+            rules_list = []
+            for _, row in df_rules.iterrows():
+                rule_line = str(row.iloc[0]).strip()
+                if rule_line and rule_line != 'nan' and rule_line != 'None':
+                    rules_list.append(rule_line)
+
+            # Форматируем правила с разделителями
+            for i, rule in enumerate(rules_list, 1):
+                rules_text += f"▪️ {rule}\n"
+                if i < len(rules_list):  # Не добавляем линию после последнего пункта
+                    rules_text += "─────────────────\n"
+
+            if rules_text.strip():
+                # Добавляем информацию о разработчике
+                rules_text += f"\n\n🤖 <b>Разработчик:</b> @RomanenkoIE"
+                return rules_text.strip()
+
     except Exception as e:
         print(f"Ошибка загрузки правил: {e}")
 
-    # Возвращаем правила по умолчанию, если файл не найден или пуст
-    return """📋 Правила использования зала НТЦ:
-
-• Бронь за 2 часа до игры
-• Отмена за 1 час до игры  
-• Зал бесплатен для участников клуба
-• Спортивная форма обязательна
-• Соблюдайте расписание
-• Бережно относитесь к оборудованию
-• Уважайте других участников"""
+    return "❌ Правила временно недоступны"
 
 
-# Загрузка расписания
+# Загрузка расписания из Excel
 def load_schedule():
-    df = pd.DataFrame(SCHEDULE_DATA)
-    # Явно указываем формат времени для избежания предупреждений
-    df['Начало'] = pd.to_datetime(df['Начало'], format='%H:%M:%S').dt.time
-    df['Окончание'] = pd.to_datetime(df['Окончание'], format='%H:%M:%S').dt.time
-    return df
+    """Загружает расписание из Excel файла"""
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        schedule_path = os.path.join(current_dir, SCHEDULE_FILE)
+
+        if os.path.exists(schedule_path):
+            print(f"DEBUG: Загружаем расписание из {schedule_path}")
+
+            # Читаем вкладку schedule
+            df_schedule = pd.read_excel(schedule_path, sheet_name='schedule')
+
+            # Исправляем названия колонок (убираем лишние пробелы)
+            df_schedule.columns = df_schedule.columns.str.strip()
+
+            print(f"DEBUG: Колонки schedule: {df_schedule.columns.tolist()}")
+            print(f"DEBUG: Размер DataFrame: {df_schedule.shape}")
+            print(f"DEBUG: Первые 10 строк расписания:")
+            print(df_schedule.head(10))
+
+            # Проверяем наличие необходимых колонок
+            required_columns = ['День недели', 'Начало', 'Окончание', 'Вид спорта']
+            missing_columns = [col for col in required_columns if col not in df_schedule.columns]
+            if missing_columns:
+                print(f"DEBUG: Отсутствуют колонки: {missing_columns}")
+                return None
+
+            # Проверяем, есть ли данные в DataFrame
+            if df_schedule.empty:
+                print("DEBUG: DataFrame пустой")
+                return None
+
+            # Преобразуем время в правильный формат
+            print("DEBUG: Преобразуем время...")
+
+            # Пробуем несколько форматов времени
+            df_schedule['Начало'] = pd.to_datetime(df_schedule['Начало'], format='%H:%M:%S', errors='coerce').dt.time
+            df_schedule['Окончание'] = pd.to_datetime(df_schedule['Окончание'], format='%H:%M:%S',
+                                                      errors='coerce').dt.time
+
+            # Если не сработало, пробуем формат без секунд
+            if df_schedule['Начало'].isna().sum() > 0:
+                df_schedule['Начало'] = pd.to_datetime(df_schedule['Начало'], format='%H:%M', errors='coerce').dt.time
+                df_schedule['Окончание'] = pd.to_datetime(df_schedule['Окончание'], format='%H:%M',
+                                                          errors='coerce').dt.time
+
+            # Проверяем успешность преобразования времени
+            print(f"DEBUG: Начало - пропущенные значения: {df_schedule['Начало'].isna().sum()}")
+            print(f"DEBUG: Окончание - пропущенные значения: {df_schedule['Окончание'].isna().sum()}")
+
+            # Удаляем строки с некорректным временем
+            initial_count = len(df_schedule)
+            df_schedule = df_schedule.dropna(subset=['Начало', 'Окончание'])
+            print(f"DEBUG: Удалено строк с некорректным временем: {initial_count - len(df_schedule)}")
+
+            # Заполняем пустые значения в виде спорта
+            df_schedule['Вид спорта'] = df_schedule['Вид спорта'].fillna('По резерву')
+
+            # Загружаем информацию об ответственных лицах
+            print("DEBUG: Загружаем информацию об ответственных...")
+            try:
+                df_responsible = pd.read_excel(schedule_path, sheet_name='responsiblePersons')
+                df_responsible.columns = df_responsible.columns.str.strip()
+                print(f"DEBUG: Загружено {len(df_responsible)} записей ответственных")
+
+                # Создаем словарь для быстрого доступа к ответственным лицам
+                responsible_dict = {}
+                for _, row in df_responsible.iterrows():
+                    sport_type = row['Вид спорта']
+                    if pd.notna(sport_type):
+                        responsible_dict[sport_type] = {
+                            'responsible': row['Ответственное лицо'] if pd.notna(row['Ответственное лицо']) else '',
+                            'usernames': row['Имя пользователя'] if pd.notna(row['Имя пользователя']) else ''
+                        }
+
+                # Добавляем информацию об ответственных лицах в основное расписание
+                df_schedule['Ответственное лицо'] = df_schedule['Вид спорта'].map(
+                    lambda x: responsible_dict.get(x, {}).get('responsible', '')
+                )
+                df_schedule['Имя пользователя'] = df_schedule['Вид спорта'].map(
+                    lambda x: responsible_dict.get(x, {}).get('usernames', '')
+                )
+            except Exception as e:
+                print(f"DEBUG: Ошибка загрузки ответственных: {e}")
+                df_schedule['Ответственное лицo'] = ''
+                df_schedule['Имя пользователя'] = ''
+
+            print(f"DEBUG: Успешно загружено {len(df_schedule)} записей расписания")
+            print(f"DEBUG: Уникальные дни недели: {df_schedule['День недели'].unique()}")
+            print(f"DEBUG: Уникальные виды спорта: {df_schedule['Вид спорта'].unique()}")
+
+            # Проверяем данные для понедельника
+            monday_data = df_schedule[df_schedule['День недели'] == 'Понедельник']
+            print(f"DEBUG: Данные для понедельника: {len(monday_data)} записей")
+            if not monday_data.empty:
+                print("DEBUG: Пример данных понедельника:")
+                for _, row in monday_data.iterrows():
+                    print(f"  {row['Начало']}-{row['Окончание']} - {row['Вид спорта']}")
+
+            return df_schedule
+        else:
+            print(f"DEBUG: Файл расписания {schedule_path} не найден")
+            return None
+
+    except Exception as e:
+        print(f"Ошибка загрузки расписания: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def get_notice_list():
+    """Загружает список пользователей для уведомлений"""
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        schedule_path = os.path.join(current_dir, SCHEDULE_FILE)
+
+        if os.path.exists(schedule_path):
+            df_notice = pd.read_excel(schedule_path, sheet_name='noticeList')
+            notice_list = []
+
+            # Обрабатываем все строки в колонке A
+            for _, row in df_notice.iterrows():
+                # Берем первую колонку
+                username = str(row.iloc[0]).strip()
+                # Проверяем, что это валидный username
+                if (username and
+                        username != 'nan' and
+                        username != 'None' and
+                        not username.isspace() and
+                        len(username) > 1):  # Минимум 2 символа
+                    notice_list.append(username)
+
+            print(f"DEBUG: Загружен список уведомлений: {notice_list}")
+            return notice_list
+        else:
+            print("DEBUG: Файл расписания не найден для загрузки noticeList")
+            return []
+    except Exception as e:
+        print(f"Ошибка загрузки списка уведомлений: {e}")
+        return []
+
+
+async def send_notification(context: ContextTypes.DEFAULT_TYPE, message: str):
+    """Отправляет уведомления всем пользователям из списка"""
+    notice_list = get_notice_list()
+
+    if not notice_list:
+        print("DEBUG: Список уведомлений пуст")
+        return
+
+    sent_count = 0
+    for username in notice_list:
+        try:
+            # Убираем @ если есть
+            clean_username = username.replace('@', '').strip()
+            if clean_username:
+                print(f"DEBUG: Пытаюсь отправить уведомление для @{clean_username}")
+
+                # Пробуем отправить сообщение
+                await context.bot.send_message(
+                    chat_id=clean_username,
+                    text=message,
+                    parse_mode='HTML'
+                )
+                sent_count += 1
+                print(f"DEBUG: ✅ Уведомление отправлено для @{clean_username}")
+            else:
+                print(f"DEBUG: ❌ Пустой username: {username}")
+
+        except Exception as e:
+            error_msg = str(e)
+            print(f"❌ Ошибка отправки уведомления для {username}: {error_msg}")
+
+            # Более детальный анализ ошибки
+            if "Chat not found" in error_msg:
+                print(f"   💡 Пользователь {username} не начал диалог с ботом или username неверный")
+            elif "bot was blocked" in error_msg.lower():
+                print(f"   💡 Пользователь {username} заблокировал бота")
+            elif "user not found" in error_msg.lower():
+                print(f"   💡 Пользователь {username} не найден")
+
+    print(f"DEBUG: Всего отправлено уведомлений: {sent_count}/{len(notice_list)}")
 
 
 # Получение временных слотов для конкретного дня
 def get_time_slots_for_day(day_ru):
     schedule_df = load_schedule()
+    if schedule_df is None:
+        return []
+
     day_schedule = schedule_df[schedule_df['День недели'] == day_ru]
 
     time_slots = []
@@ -130,17 +270,15 @@ def get_time_slots_for_day(day_ru):
 def get_slot_info(day_ru, time_slot):
     """Возвращает информацию о слоте"""
     schedule_df = load_schedule()
-    day_schedule = schedule_df[schedule_df['День недели'] == day_ru]
+    if schedule_df is None:
+        return None
 
-    print(f"DEBUG get_slot_info: Looking for {day_ru} {time_slot}")
-    print(f"DEBUG get_slot_info: Available slots in {day_ru}:")
+    day_schedule = schedule_df[schedule_df['День недели'] == day_ru]
 
     for _, slot in day_schedule.iterrows():
         start_str = slot['Начало'].strftime('%H:%M')
         end_str = slot['Окончание'].strftime('%H:%M')
         current_slot = f"{start_str}-{end_str}"
-        sport_type = slot['Вид спорта']
-        print(f"DEBUG get_slot_info: - {current_slot}: {sport_type}")
 
         if current_slot == time_slot:
             result = {
@@ -148,10 +286,8 @@ def get_slot_info(day_ru, time_slot):
                 'responsible': slot['Ответственное лицо'],
                 'usernames': slot['Имя пользователя']
             }
-            print(f"DEBUG get_slot_info: Found slot: {result}")
             return result
 
-    print(f"DEBUG get_slot_info: Slot not found for {day_ru} {time_slot}")
     return None
 
 
@@ -163,13 +299,13 @@ def create_responsible_buttons(responsible_text, usernames_text):
         return buttons
 
     # Разделяем ответственных лиц
-    responsible_persons = [p.strip() for p in responsible_text.split('/')]
+    responsible_persons = [p.strip() for p in responsible_text.split('|')]
     username_list = [u.strip() for u in usernames_text.split('|')]
 
     for i, person in enumerate(responsible_persons):
         if i < len(username_list):
             username = username_list[i].replace('@', '').strip()
-            if username and username != 'username':
+            if username and username != 'telegramuser' and username != 'username':
                 buttons.append([
                     InlineKeyboardButton(
                         f"👤 {person}",
@@ -223,7 +359,7 @@ def save_data():
 load_data()
 
 # Название зала
-HALL_NAME = "🏸 Спортивный зал НТЦ"
+HALL_NAME = "💪 Спортивный зал НТЦ"
 
 
 # Функции для проверки доступности слотов
@@ -274,7 +410,7 @@ def add_booking(user_id, booking_data):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("🏸 💪 Забронировать зал", callback_data="select_date")],
+        [InlineKeyboardButton("💪 Забронировать зал", callback_data="select_date")],
         [InlineKeyboardButton("📅 Расписание", callback_data="schedule")],
         [InlineKeyboardButton("📋 Мои брони", callback_data="my_bookings")],
         [InlineKeyboardButton("ℹ️ Правила", callback_data="rules")]
@@ -282,9 +418,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        "🏸 💪 Добро пожаловать в спортивный клуб НТЦ!\n\n"
+        "💪 Добро пожаловать в спортивный клуб НТЦ!\n\n"
         "Зал доступен для бронирования участникам клуба.\n"
-        "Выберите действие:",
+        "Выберите действия:",
         reply_markup=reply_markup
     )
 
@@ -292,7 +428,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_from_query(query):
     """Главное меню из callback query"""
     keyboard = [
-        [InlineKeyboardButton("🏸 Забронировать зал", callback_data="select_date")],
+        [InlineKeyboardButton("💪 Забронировать зал", callback_data="select_date")],
         [InlineKeyboardButton("📅 Расписание", callback_data="schedule")],
         [InlineKeyboardButton("📋 Мои брони", callback_data="my_bookings")],
         [InlineKeyboardButton("ℹ️ Правила", callback_data="rules")]
@@ -300,98 +436,182 @@ async def start_from_query(query):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await query.edit_message_text(
-        "🏸 Добро пожаловать в спортивный клуб НТЦ!\n\n"
+        "💪 Добро пожаловать в спортивный клуб НТЦ!\n\n"
         "Зал доступен для бронирования участникам клуба.\n"
-        "Выберите действие:",
+        "Выберите действия:",
         reply_markup=reply_markup
     )
 
 
-async def show_dates(query):
-    """Показывает доступные даты для бронирования"""
-    keyboard = []
-    today = datetime.datetime.now()
-
-    # Показываем 7 дней вперед
-    for i in range(7):
-        date = today + datetime.timedelta(days=i)
+def get_week_dates(start_date, days_count=7):
+    """Возвращает список дат для недели начиная с start_date"""
+    dates = []
+    for i in range(days_count):
+        date = start_date + datetime.timedelta(days=i)
         date_str = date.strftime("%d.%m.%Y")
         day_name_ru = RUSSIAN_DAYS[date.weekday()]
-
-        keyboard.append([
-            InlineKeyboardButton(
-                f"{date_str} ({day_name_ru})",
-                callback_data=f"date_{date_str}"
-            )
-        ])
-
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await query.edit_message_text(
-        "📅 Выберите дату для бронирования:",
-        reply_markup=reply_markup
-    )
+        dates.append((date_str, day_name_ru))
+    return dates
 
 
-async def show_times(query, date_str):
-    """Показывает доступное время для выбранной даты"""
-    # Получаем русское название дня недели для выбранной даты
+def get_week_range_display(start_date):
+    """Возвращает строку с диапазоном дат недели"""
+    end_date = start_date + datetime.timedelta(days=6)
+    start_str = start_date.strftime("%d.%m")
+    end_str = end_date.strftime("%d.%m")
+    return f"{start_str}-{end_str}"
+
+
+def get_day_slots(date_str):
+    """Возвращает все слоты для дня с информацией о доступности"""
     date_obj = datetime.datetime.strptime(date_str, "%d.%m.%Y")
     day_ru = RUSSIAN_DAYS[date_obj.weekday()]
 
-    # Получаем временные слоты для этого дня из расписания
-    time_slots = get_time_slots_for_day(day_ru)
-
-    if not time_slots:
-        await query.edit_message_text(
-            f"❌ На {date_str} ({day_ru}) зал не работает.\nВыберите другую дату.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Назад к выбору даты", callback_data="select_date")]
-            ])
-        )
-        return
-
-    # Получаем информацию о слотах для отображения статуса
     schedule_df = load_schedule()
+    if schedule_df is None:
+        return []
+
+    print(f"DEBUG: Поиск слотов для {date_str} ({day_ru})")
+
     day_schedule = schedule_df[schedule_df['День недели'] == day_ru]
+    print(f"DEBUG: Найдено {len(day_schedule)} записей для {day_ru}")
 
-    keyboard = []
-
-    # Создаем кнопки времени - ВСЕ слоты можно бронировать
+    slots = []
     for _, slot in day_schedule.iterrows():
         start_str = slot['Начало'].strftime('%H:%M')
         end_str = slot['Окончание'].strftime('%H:%M')
         time_slot = f"{start_str}-{end_str}"
         sport_type = slot['Вид спорта']
 
-        # Для всех слотов показываем возможность бронирования
-        if is_slot_available(date_str, time_slot):
-            if sport_type == 'По резерву':
+        available = is_slot_available(date_str, time_slot)
+        booking_info = None
+        if not available:
+            booking_info = get_booking_info(date_str, time_slot)
+
+        slots.append({
+            'time_slot': time_slot,
+            'sport_type': sport_type,
+            'available': available,
+            'booking_info': booking_info
+        })
+
+    print(f"DEBUG: Сформировано {len(slots)} слотов для {day_ru}")
+    return slots
+
+
+async def show_week_slots(query, week_offset=0):
+    """Показывает все слоты на всю неделю с группировкой по дням"""
+    today = datetime.datetime.now()
+    start_date = today + datetime.timedelta(weeks=week_offset)
+
+    # Определяем начало недели (понедельник)
+    start_of_week = start_date - datetime.timedelta(days=start_date.weekday())
+
+    # Формируем заголовок с выделенной информацией о неделе
+    week_range = get_week_range_display(start_of_week)
+
+    if week_offset == 0:
+        week_info = "🏠 ТЕКУЩАЯ НЕДЕЛЯ"
+        header = f"<b>📅 {week_info}</b>\n"
+    else:
+        week_number = week_offset + 1
+        week_info = f"{week_number}-Я НЕДЕЛЯ"
+        header = f"<b>📅 {week_info} ({week_range})</b>\n"
+
+    message_text = f"💪 Доступные слоты для бронирования:\n{header}\n"
+
+    keyboard = []
+    week_dates = get_week_dates(start_of_week)
+
+    print(f"DEBUG: Показываем неделю с {start_of_week.strftime('%d.%m.%Y')}")
+
+    for date_str, day_name in week_dates:
+        date_obj = datetime.datetime.strptime(date_str, "%d.%m.%Y")
+
+        # Пропускаем прошедшие даты
+        if date_obj.date() < today.date():
+            print(f"DEBUG: Пропускаем прошедшую дату {date_str}")
+            continue
+
+        # Получаем все слоты для этого дня
+        day_slots = get_day_slots(date_str)
+
+        if not day_slots:
+            # День когда зал не работает
+            print(f"DEBUG: Для {date_str} ({day_name}) нет слотов")
+            continue
+
+        # Добавляем заголовок дня в клавиатуру с иконкой календаря
+        keyboard.append([InlineKeyboardButton(
+            f"📅 {date_str} ({day_name})",
+            callback_data="day_header"
+        )])
+
+        # ВСЕ СЛОТЫ ПОКАЗЫВАЕМ ОДИН ПОД ДРУГИМ
+        for slot in day_slots:
+            # Форматируем время с фиксированной шириной
+            time_display = slot['time_slot']
+
+            if slot['available']:
+                if slot['sport_type'] == 'По резерву':
+                    button_text = f"🟢 {time_display} - Любой вид спорта"
+                else:
+                    button_text = f"🟢 {time_display} - {slot['sport_type']}"
+
+                # Каждый слот в отдельной строке
                 keyboard.append([InlineKeyboardButton(
-                    f"🟢 {time_slot} - Свободно",
-                    callback_data=f"time_{date_str}_{time_slot}"
+                    button_text,
+                    callback_data=f"time_{date_str}_{slot['time_slot']}"
                 )])
             else:
-                keyboard.append([InlineKeyboardButton(
-                    f"🟢 {time_slot} - {sport_type} (рекомендуется)",
-                    callback_data=f"time_{date_str}_{time_slot}"
-                )])
-        else:
-            # Занятые слоты
-            keyboard.append([InlineKeyboardButton(
-                f"🔴 {time_slot} - Занято",
-                callback_data=f"details_{date_str}_{time_slot}"
-            )])
+                # Занятые слоты - кнопка для просмотра информации
+                booking_info = slot['booking_info']
+                if booking_info:
+                    if slot['sport_type'] == 'По резерву':
+                        button_text = f"🔴 {time_display} - Занято"
+                    else:
+                        button_text = f"🔴 {time_display} - {slot['sport_type']}"
 
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="select_date")])
+                    # Каждый слот в отдельной строке
+                    keyboard.append([InlineKeyboardButton(
+                        button_text,
+                        callback_data=f"details_{date_str}_{slot['time_slot']}"
+                    )])
+
+    # Кнопки для навигации по неделям
+    nav_buttons = []
+
+    if week_offset > 0:
+        nav_buttons.append(InlineKeyboardButton(
+            "◀️ Неделя назад",
+            callback_data=f"week_{week_offset - 1}"
+        ))
+
+    # Показываем кнопку следующей недели если есть доступные недели
+    if week_offset < 3:  # 0=текущая, 1,2,3 = следующие 3 недели
+        nav_buttons.append(InlineKeyboardButton(
+            "Неделя вперёд ▶️",
+            callback_data=f"week_{week_offset + 1}"
+        ))
+
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    # Добавляем легенду
+    legend = (
+        "\n📊 <b>Легенда:</b>\n"
+        "🟢 - Свободно для брони\n"
+        "🔴 - Уже занято\n\n"
+        "💡 <i>Нажмите на зеленый слот для бронирования или на красный для информации</i>"
+    )
+
+    message_text += legend
+
     await query.edit_message_text(
-        f"🕐 Выберите время на {date_str} ({day_ru}):\n\n"
-        f"🟢 - свободно для брони\n"
-        f"🔴 - уже забронировано\n\n"
-        f"<i>Вид спорта указан как рекомендуемый, но вы можете выбрать любой</i>",
+        message_text,
         parse_mode='HTML',
         reply_markup=reply_markup
     )
@@ -447,13 +667,13 @@ async def select_sport_type(query, user_id, user_name, date_str, time_slot):
         if row:
             sport_keyboard.append(row)
 
-    sport_keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=f"date_{date_str}")])
+    sport_keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=f"week_0")])
     reply_markup = InlineKeyboardMarkup(sport_keyboard)
 
     recommendation_text = f"\n\n🎯 <b>Рекомендуется:</b> {recommended_sport}" if recommended_sport else ""
 
     await query.edit_message_text(
-        f"🏸 Выберите вид спорта для {date_str} {time_slot}:{recommendation_text}",
+        f"💪 Выберите вид спорта для {date_str} {time_slot}:{recommendation_text}",
         parse_mode='HTML',
         reply_markup=reply_markup
     )
@@ -462,23 +682,27 @@ async def select_sport_type(query, user_id, user_name, date_str, time_slot):
 def get_sport_emoji(sport_type):
     """Возвращает эмодзи для вида спорта"""
     emoji_map = {
-        "Бадминтон": "🎾",
+        "Бадминтон": "🏸",
         "Настольный теннис": "🏓",
-        "Волейбол": "🏐",
+        "Волейбол": "🏐",  # Общий волейбол
+        "Волейбол (муж)": "🏐👨",  # Мужской волейбол
+        "Волейбол (жен)": "🏐👩",  # Женский волейбол
         "Мини-футбол": "⚽",
         "Йога": "🧘",
         "Фитнес": "💪",
         "Теннис (большой)": "🎾",
-        "Баскетбол": "🏀"
+        "Теннис (настольный)": "🏓",
+        "Баскетбол": "🏀",
+        "По резерву": "🟢"
     }
-    return emoji_map.get(sport_type, "🏸")
+    return emoji_map.get(sport_type, "🎯")
 
 
 async def confirm_booking(query, user_id, user_name, date_str, time_slot, sport_type):
     """Подтверждение бронирования"""
     keyboard = [
         [InlineKeyboardButton("✅ Подтвердить бронь", callback_data=f"confirm_{date_str}_{time_slot}_{sport_type}")],
-        [InlineKeyboardButton("❌ Отмена", callback_data=f"date_{date_str}")]
+        [InlineKeyboardButton("❌ Отмена", callback_data=f"week_0")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -494,7 +718,8 @@ async def confirm_booking(query, user_id, user_name, date_str, time_slot, sport_
     )
 
 
-async def finalize_booking(query, user_id, user_name, date_str, time_slot, sport_type):
+async def finalize_booking(query, user_id, user_name, date_str, time_slot, sport_type,
+                           context: ContextTypes.DEFAULT_TYPE = None):
     """Завершение бронирования"""
     reserve_slot(date_str, time_slot, user_id)
 
@@ -509,12 +734,24 @@ async def finalize_booking(query, user_id, user_name, date_str, time_slot, sport
         'time': time_slot,
         'date': date_str,
         'sport_type': sport_type,
-        'price': "Бесплатно",
         'name': user_name,
         'username': username  # Сохраняем username
     }
 
     add_booking(user_id, booking_data)
+
+    # Отправляем уведомление о новой брони
+    notification_message = (
+        f"🔔 Новая бронь!\n"
+        f"📅 {date_str} {time_slot}\n"
+        f"🎯 {sport_type}\n"
+        f"👤 {user_name} (@{username if username else 'нет username'})"
+    )
+
+    if context:
+        await send_notification(context, notification_message)
+    else:
+        print(f"DEBUG: Уведомление о брони: {notification_message}")
 
     await query.edit_message_text(
         f"✅ Бронь подтверждена!\n\n"
@@ -523,9 +760,8 @@ async def finalize_booking(query, user_id, user_name, date_str, time_slot, sport
         f"• Зал: {HALL_NAME}\n"
         f"• Дата: {date_str}\n"
         f"• Время: {time_slot}\n"
-        f"• Вид спорта: {sport_type}\n"
-        f"• Стоимость: Бесплатно\n\n"
-        f"Ждем вас в клубе! 🏸"
+        f"• Вид спорта: {sport_type}\n\n"
+        f"Ждем вас в клубе! 💪"
     )
 
 
@@ -538,8 +774,7 @@ async def show_contact_details(query, booking_info, date_str, time_slot):
         f"📅 <b>Дата:</b> {date_str}\n"
         f"🕐 <b>Время:</b> {time_slot}\n"
         f"🎯 <b>Вид спорта:</b> {booking_info['sport_type']}\n"
-        f"👤 <b>Имя:</b> {booking_info['name']}\n"
-        f"💰 <b>Стоимость:</b> {booking_info['price']}\n\n"
+        f"👤 <b>Имя:</b> {booking_info['name']}\n\n"
     )
 
     keyboard = []
@@ -563,7 +798,7 @@ async def show_contact_details(query, booking_info, date_str, time_slot):
 
     # Кнопка назад
     keyboard.append([
-        InlineKeyboardButton("🔙 Назад к выбору времени", callback_data=f"date_{date_str}")
+        InlineKeyboardButton("🔙 Назад к расписанию", callback_data=f"week_0")
     ])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -575,7 +810,7 @@ async def show_contact_details(query, booking_info, date_str, time_slot):
     )
 
 
-async def cancel_specific_booking(query, user_id, booking_id):
+async def cancel_specific_booking(query, user_id, booking_id, context: ContextTypes.DEFAULT_TYPE = None):
     """Отменяет конкретную бронь"""
     if user_id in bookings:
         user_bookings = bookings[user_id]
@@ -590,6 +825,19 @@ async def cancel_specific_booking(query, user_id, booking_id):
                 if not user_bookings:
                     del bookings[user_id]
                 save_data()
+
+                # Отправляем уведомление об отмене брони
+                notification_message = (
+                    f"🔔 Отмена брони!\n"
+                    f"📅 {booking['date']} {booking['time']}\n"
+                    f"🎯 {booking['sport_type']}\n"
+                    f"👤 {booking['name']} (@{booking.get('username', 'нет username')})"
+                )
+
+                if context:
+                    await send_notification(context, notification_message)
+                else:
+                    print(f"DEBUG: Уведомление об отмене: {notification_message}")
 
                 await query.edit_message_text(
                     f"✅ Бронь отменена!\n"
@@ -624,7 +872,6 @@ async def show_user_bookings(query, user_id):
                 f"  📅 Дата: {booking['date']}\n"
                 f"  🕐 Время: {booking['time']}\n"
                 f"  🎯 Вид спорта: {booking['sport_type']}\n"
-                f"  💰 Стоимость: {booking['price']}\n"
                 f"  ────────────────────\n"
             )
             # Добавляем кнопку для отмены каждой брони
@@ -642,9 +889,9 @@ async def show_user_bookings(query, user_id):
     else:
         await query.edit_message_text(
             "❌ У вас нет активных броней\n\n"
-            "Нажмите '🏸 Забронировать зал' чтобы создать первую бронь!",
+            "Нажмите '💪 Забронировать зал' чтобы создать первую бронь!",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🏸 Забронировать зал", callback_data="select_date")],
+                [InlineKeyboardButton("💪 Забронировать зал", callback_data="select_date")],
                 [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]
             ])
         )
@@ -653,6 +900,14 @@ async def show_user_bookings(query, user_id):
 async def show_weekly_schedule(query):
     """Показывает расписание на всю неделю в виде красивой таблицы"""
     schedule_df = load_schedule()
+    if schedule_df is None:
+        await query.edit_message_text(
+            "❌ Расписание временно недоступно\nПопробуйте позже",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]
+            ])
+        )
+        return
 
     schedule_text = "📅 <b>РАСПИСАНИЕ СПОРТИВНОГО ЗАЛА НТЦ</b>\n\n"
 
@@ -671,13 +926,13 @@ async def show_weekly_schedule(query):
                 sport_display = sport_type if sport_type else "Свободно"
 
                 if sport_type == 'По резерву':
-                    schedule_text += f"│ 🟢 <code>{time_display:^11}</code> │ Свободно для брони\n"
+                    schedule_text += f"│ 🟢 <code>{time_display:^11}</code> │ Любой вид спорта\n"
                 else:
                     schedule_text += f"│ 🔵 <code>{time_display:^11}</code> │ {sport_display}\n"
 
             schedule_text += "└─────────────────────────────\n\n"
 
-    schedule_text += "\n<code>🟢</code> - свободно для брони\n<code>🔵</code> - регулярное занятие\n\nНажмите на кнопку дня для деталей👇"
+    schedule_text += "\n<code>🟢</code> - Любой вид спорта по резерву\n<code>🔵</code> - регулярное занятие\n\nНажмите на кнопку дня для деталей👇"
 
     # Кнопки для каждого дня
     keyboard = []
@@ -704,6 +959,15 @@ async def show_day_schedule(query, day_ru):
     await query.answer()  # Подтверждаем нажатие кнопки
 
     schedule_df = load_schedule()
+    if schedule_df is None:
+        await query.edit_message_text(
+            "❌ Расписание временно недоступно",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Назад к расписанию", callback_data="schedule")]
+            ])
+        )
+        return
+
     day_schedule = schedule_df[schedule_df['День недели'] == day_ru]
 
     if day_schedule.empty:
@@ -726,7 +990,7 @@ async def show_day_schedule(query, day_ru):
         time_display = f"{start_str}-{end_str}"
 
         if sport_type == 'По резерву':
-            schedule_text += f"🟢 <b>{time_display}</b> - Свободно для брони\n"
+            schedule_text += f"🟢 <b>{time_display}</b> - Любой вид спорта\n"
         else:
             schedule_text += f"🔵 <b>{time_display}</b> - {sport_type}\n"
             if responsible:
@@ -742,7 +1006,7 @@ async def show_day_schedule(query, day_ru):
         sport_type = slot['Вид спорта']
 
         if sport_type == 'По резерву':
-            button_text = f"🟢 {time_slot} - Свободно"
+            button_text = f"🟢 {time_slot} - Любой вид спорта"
         else:
             button_text = f"🔵 {time_slot} - {sport_type}"
 
@@ -752,7 +1016,6 @@ async def show_day_schedule(query, day_ru):
         sport_simple = sport_type.split(' ')[0]  # Берем первое слово из вида спорта
 
         callback_data = f"slot_{day_simple}_{time_simple}"
-        print(f"DEBUG: Creating button: {button_text} -> {callback_data}")
 
         keyboard.append([
             InlineKeyboardButton(
@@ -775,8 +1038,6 @@ async def show_slot_details(query, date_str, time_slot, slot_info):
     """Показывает детальную информацию о регулярном занятии"""
     date_obj = datetime.datetime.strptime(date_str, "%d.%m.%Y")
     day_ru = RUSSIAN_DAYS[date_obj.weekday()]
-
-    print(f"DEBUG: show_slot_details: day={day_ru}, time={time_slot}, info={slot_info}")
 
     # Если слот не найден, это означает ошибку в данных
     if not slot_info:
@@ -815,17 +1076,304 @@ async def show_slot_details(query, date_str, time_slot, slot_info):
     )
 
 
+async def show_sport_categories(query):
+    """Показывает кнопки с видами спорта для выбора ответственных"""
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        schedule_path = os.path.join(current_dir, SCHEDULE_FILE)
+
+        if not os.path.exists(schedule_path):
+            await query.edit_message_text(
+                "❌ Информация об ответственных лицах временно недоступна",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Назад", callback_data="rules")]
+                ])
+            )
+            return
+
+        df_responsible = pd.read_excel(schedule_path, sheet_name='responsiblePersons')
+
+        # Проверяем и исправляем названия колонок
+        df_responsible.columns = df_responsible.columns.str.strip()
+        print(f"DEBUG: Колонки responsiblePersons: {df_responsible.columns.tolist()}")
+
+        # Проверяем наличие необходимой колонки
+        if 'Вид спорта' not in df_responsible.columns:
+            print("DEBUG: Колонка 'Вид спорта' не найдена в responsiblePersons")
+            await query.edit_message_text(
+                "❌ Ошибка в структуре данных об ответственных лицах",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Назад", callback_data="rules")]
+                ])
+            )
+            return
+
+        # Создаем список уникальных видов спорта
+        sport_types = []
+        for _, row in df_responsible.iterrows():
+            sport_type = row['Вид спорта']
+            # Проверяем что значение не пустое и не NaN
+            if pd.notna(sport_type) and str(sport_type).strip() and sport_type not in sport_types:
+                sport_types.append(str(sport_type).strip())
+
+        print(f"DEBUG: Найдено видов спорта: {sport_types}")
+
+        if not sport_types:
+            await query.edit_message_text(
+                "❌ Нет данных об ответственных лицах",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Назад", callback_data="rules")]
+                ])
+            )
+            return
+
+        # Создаем кнопки для каждого вида спорта
+        keyboard = []
+        for i in range(0, len(sport_types), 2):
+            row = []
+            if i < len(sport_types):
+                sport1 = sport_types[i]
+                emoji1 = get_sport_emoji(sport1)
+                row.append(InlineKeyboardButton(
+                    f"{emoji1} {sport1}",
+                    callback_data=f"responsible_{sport1.replace(' ', '_')}"  # Заменяем пробелы на подчеркивания
+                ))
+            if i + 1 < len(sport_types):
+                sport2 = sport_types[i + 1]
+                emoji2 = get_sport_emoji(sport2)
+                row.append(InlineKeyboardButton(
+                    f"{emoji2} {sport2}",
+                    callback_data=f"responsible_{sport2.replace(' ', '_')}"  # Заменяем пробелы на подчеркивания
+                ))
+            if row:
+                keyboard.append(row)
+
+        # Добавляем кнопку для просмотра всех ответственных
+        keyboard.append([InlineKeyboardButton("📋 Все ответственные", callback_data="responsible_list")])
+        keyboard.append([InlineKeyboardButton("🔙 Назад к правилам", callback_data="rules")])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(
+            "👥 <b>ВЫБЕРИТЕ ВИД СПОРТА</b>\n\n"
+            "Нажмите на кнопку с видом спорта, чтобы увидеть ответственных лиц:",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+
+    except Exception as e:
+        print(f"Ошибка загрузки категорий спорта: {e}")
+        import traceback
+        traceback.print_exc()
+        await query.edit_message_text(
+            "❌ Ошибка загрузки информации об ответственных лицах",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Назад", callback_data="rules")]
+            ])
+        )
+
+
+async def show_responsible_for_sport(query, sport_type_encoded):
+    """Показывает ответственных лиц для конкретного вида спорта"""
+    try:
+        # Восстанавливаем оригинальное название вида спорта (заменяем подчеркивания обратно на пробелы)
+        sport_type = sport_type_encoded.replace('_', ' ')
+
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        schedule_path = os.path.join(current_dir, SCHEDULE_FILE)
+
+        if not os.path.exists(schedule_path):
+            await query.edit_message_text(
+                "❌ Информация об ответственных лицах временно недоступна",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Назад", callback_data="sport_categories")]
+                ])
+            )
+            return
+
+        df_responsible = pd.read_excel(schedule_path, sheet_name='responsiblePersons')
+        df_responsible.columns = df_responsible.columns.str.strip()
+
+        # Ищем информацию для выбранного вида спорта
+        sport_info = None
+        for _, row in df_responsible.iterrows():
+            current_sport = str(row['Вид спорта']).strip() if pd.notna(row['Вид спорта']) else ""
+            if current_sport == sport_type:
+                sport_info = row
+                break
+
+        if sport_info is None:
+            await query.edit_message_text(
+                f"❌ Нет информации об ответственных для {sport_type}",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Назад к видам спорта", callback_data="sport_categories")]
+                ])
+            )
+            return
+
+        emoji = get_sport_emoji(sport_type)
+        responsible_text = (
+            f"{emoji} <b>{sport_type.upper()}</b>\n\n"
+            f"👥 <b>Ответственные лица:</b>\n"
+        )
+
+        # Добавляем ответственных лиц
+        if pd.notna(sport_info['Ответственное лицо']):
+            responsible_text += f"{sport_info['Ответственное лицо']}\n\n"
+        else:
+            responsible_text += "Не указаны\n\n"
+
+        responsible_text += "💬 <b>Для связи нажмите на кнопки ниже:</b>"
+
+        # Создаем кнопки для ответственных лиц
+        keyboard = []
+        if pd.notna(sport_info['Ответственное лицо']) and pd.notna(sport_info['Имя пользователя']):
+            keyboard = create_responsible_buttons(
+                sport_info['Ответственное лицо'],
+                sport_info['Имя пользователя']
+            )
+
+        # Добавляем кнопки навигации
+        keyboard.append([InlineKeyboardButton("🔙 Назад к видам спорта", callback_data="sport_categories")])
+        keyboard.append([InlineKeyboardButton("📋 Все ответственные", callback_data="responsible_list")])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(
+            responsible_text,
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+
+    except Exception as e:
+        print(f"Ошибка загрузки ответственных для {sport_type_encoded}: {e}")
+        import traceback
+        traceback.print_exc()
+        await query.edit_message_text(
+            f"❌ Ошибка загрузки информации для {sport_type_encoded}",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Назад", callback_data="sport_categories")]
+            ])
+        )
+
+
+async def show_all_responsible(query):
+    """Показывает всех ответственных лиц одним списком"""
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        schedule_path = os.path.join(current_dir, SCHEDULE_FILE)
+
+        if not os.path.exists(schedule_path):
+            await query.edit_message_text(
+                "❌ Информация об ответственных лицах временно недоступна",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Назад", callback_data="sport_categories")]
+                ])
+            )
+            return
+
+        df_responsible = pd.read_excel(schedule_path, sheet_name='responsiblePersons')
+        df_responsible.columns = df_responsible.columns.str.strip()
+
+        responsible_text = "👥 <b>ВСЕ ОТВЕТСТВЕННЫЕ ЛИЦА</b>\n\n"
+
+        keyboard = []
+
+        for _, row in df_responsible.iterrows():
+            sport_type = str(row['Вид спорта']).strip() if pd.notna(row['Вид спорта']) else "Не указан"
+            responsible = row['Ответственное лицо'] if pd.notna(row['Ответственное лицо']) else "Не указаны"
+            usernames = row['Имя пользователя'] if pd.notna(row['Имя пользователя']) else ""
+
+            emoji = get_sport_emoji(sport_type)
+            responsible_text += f"{emoji} <b>{sport_type}</b>\n"
+            responsible_text += f"   👤 {responsible}\n\n"
+
+            # Создаем кнопки для ответственных
+            if responsible != "Не указаны" and usernames:
+                buttons = create_responsible_buttons(responsible, usernames)
+                if buttons:
+                    keyboard.extend(buttons)
+
+        # Добавляем кнопки навигации
+        keyboard.append([InlineKeyboardButton("📂 По видам спорта", callback_data="sport_categories")])
+        keyboard.append([InlineKeyboardButton("🔙 Назад к правилам", callback_data="rules")])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(
+            responsible_text,
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+
+    except Exception as e:
+        print(f"Ошибка загрузки всех ответственных: {e}")
+        import traceback
+        traceback.print_exc()
+        await query.edit_message_text(
+            "❌ Ошибка загрузки информации об ответственных лицах",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Назад", callback_data="sport_categories")]
+            ])
+        )
+
+
 async def show_rules(query):
-    """Показывает правила из файла rules.txt"""
-    # Загружаем правила каждый раз при нажатии на кнопку
+    """Показывает правила из Excel файла с кнопками"""
     rules_text = load_rules()
 
-    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]]
+    keyboard = [
+        [InlineKeyboardButton("👥 Ответственные лица", callback_data="sport_categories")],
+        [InlineKeyboardButton("✉️ Связь с разработчиком", url="https://t.me/RomanenkoIE")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await query.edit_message_text(
         rules_text,
         reply_markup=reply_markup,
+        parse_mode='HTML'
+    )
+
+
+async def get_my_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда для получения своего chat_id"""
+    user = update.effective_user
+    chat_id = update.effective_chat.id
+
+    message = (
+        f"👤 <b>Ваши данные:</b>\n"
+        f"• ID: <code>{user.id}</code>\n"
+        f"• Chat ID: <code>{chat_id}</code>\n"
+        f"• Имя: {user.first_name or 'Не указано'}\n"
+        f"• Фамилия: {user.last_name or 'Не указана'}\n"
+        f"• Username: @{user.username or 'Не указан'}\n\n"
+        f"📋 <b>Сообщите администратору:</b>\n"
+        f"• Username: <code>@{user.username}</code>\n"
+        f"• Chat ID: <code>{chat_id}</code>"
+    )
+
+    await update.message.reply_text(message, parse_mode='HTML')
+
+
+async def test_notify(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Тестовая команда для проверки уведомлений"""
+    user = update.effective_user
+
+    test_message = (
+        f"🔔 <b>ТЕСТОВОЕ УВЕДОМЛЕНИЕ</b>\n\n"
+        f"📅 Время: {datetime.datetime.now().strftime('%d.%m.%Y %H:%M:%S')}\n"
+        f"👤 От: {user.first_name or 'Тест'}\n"
+        f"🆔 Chat ID: <code>{user.id}</code>\n\n"
+        f"✅ Если вы видите это сообщение, система уведомлений работает!"
+    )
+
+    await send_notification(context, test_message)
+
+    # Отправляем подтверждение обратно пользователю
+    await update.message.reply_text(
+        f"✅ Тестовое уведомление отправлено!\n"
+        f"📊 Проверьте логи бота для деталей отправки.",
         parse_mode='HTML'
     )
 
@@ -840,7 +1388,9 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # Обработка всплывающих окон (должна быть ДО await query.answer())
         if query.data.startswith("info_"):
+            print("DEBUG: Processing info_ button")
             data_parts = query.data.replace("info_", "").split("_")
+            print(f"DEBUG: data_parts: {data_parts}")
             date_str = data_parts[0]
             time_slot = data_parts[1]
 
@@ -859,8 +1409,9 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         elif query.data.startswith("slot_"):
-            # Показываем информацию о регулярном занятии (упрощенный формат)
+            print("DEBUG: Processing slot_ button")
             data_parts = query.data.replace("slot_", "").split("_")
+            print(f"DEBUG: data_parts: {data_parts}")
             day_short = data_parts[0]
             time_simple = data_parts[1]
 
@@ -882,10 +1433,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 time_slot = time_simple
 
-            print(f"DEBUG: Processing slot: day={day_ru}, time={time_slot}")
-
             slot_info = get_slot_info(day_ru, time_slot)
-            print(f"DEBUG: Slot info: {slot_info}")
 
             if not slot_info:
                 await query.answer("❌ Информация о времени не найдена", show_alert=True)
@@ -901,8 +1449,9 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         elif query.data.startswith("details_"):
-            # Показываем детальную информацию с кликабельными ссылками
+            print("DEBUG: Processing details_ button")
             data_parts = query.data.replace("details_", "").split("_")
+            print(f"DEBUG: data_parts: {data_parts}")
             date_str = data_parts[0]
             time_slot = data_parts[1]
 
@@ -911,36 +1460,68 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await show_contact_details(query, booking_info, date_str, time_slot)
             return
 
-        elif query.data.startswith("cancel_"):
-            # Обработка отмены конкретной брони
-            booking_id = query.data.replace("cancel_", "")
-            await cancel_specific_booking(query, user_id, booking_id)
-            return
-
-        elif query.data.startswith("day_"):
-            # Обработка кнопок дней недели
-            day_ru = query.data.replace("day_", "")
-            await show_day_schedule(query, day_ru)
+        elif query.data == "day_header":
+            await query.answer("📅 Заголовок дня", show_alert=False)
             return
 
         # Для остальных кнопок
         await query.answer()
 
+        print(f"DEBUG: Processing main button: {query.data}")
+
+        # Сначала проверяем специальные кнопки, потом общие префиксы
         if query.data == "select_date":
-            await show_dates(query)
+            print("DEBUG: Calling show_week_slots")
+            await show_week_slots(query, week_offset=0)
 
         elif query.data == "schedule":
+            print("DEBUG: Calling show_weekly_schedule")
             await show_weekly_schedule(query)
 
         elif query.data == "back_to_main":
+            print("DEBUG: Calling start_from_query")
             await start_from_query(query)
 
-        elif query.data.startswith("date_"):
-            date_str = query.data.replace("date_", "")
-            await show_times(query, date_str)
+        elif query.data == "my_bookings":
+            print("DEBUG: Calling show_user_bookings")
+            await show_user_bookings(query, user_id)
+
+        elif query.data == "rules":
+            print("DEBUG: Calling show_rules")
+            await show_rules(query)
+
+        elif query.data == "sport_categories":
+            print("DEBUG: Calling show_sport_categories")
+            await show_sport_categories(query)
+
+        elif query.data == "responsible_list":
+            print("DEBUG: Calling show_all_responsible")
+            await show_all_responsible(query)
+
+        # Теперь проверяем префиксы
+        elif query.data.startswith("week_"):
+            print("DEBUG: Processing week_ button")
+            # Обработка переключения недель
+            week_offset = int(query.data.replace("week_", ""))
+            await show_week_slots(query, week_offset)
+
+        elif query.data.startswith("day_"):
+            print("DEBUG: Processing day_ button")
+            # Обработка кнопок дней недели
+            day_ru = query.data.replace("day_", "")
+            await show_day_schedule(query, day_ru)
+
+        elif query.data.startswith("responsible_"):
+            print("DEBUG: Processing responsible_ button")
+            # Извлекаем вид спорта из callback_data
+            sport_type_encoded = query.data.replace("responsible_", "")
+            print(f"DEBUG: sport_type_encoded: {sport_type_encoded}")
+            await show_responsible_for_sport(query, sport_type_encoded)
 
         elif query.data.startswith("time_"):
+            print("DEBUG: Processing time_ button")
             data_parts = query.data.replace("time_", "").split("_")
+            print(f"DEBUG: time data_parts: {data_parts}")
             date_str = data_parts[0]
             time_slot = data_parts[1]
 
@@ -950,12 +1531,14 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text(
                     "❌ Это время уже занято!\nВыберите другое время.",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔙 Назад к выбору времени", callback_data=f"date_{date_str}")]
+                        [InlineKeyboardButton("🔙 Назад к расписанию", callback_data=f"week_0")]
                     ])
                 )
 
         elif query.data.startswith("sport_"):
+            print("DEBUG: Processing sport_ button")
             data_parts = query.data.replace("sport_", "").split("_")
+            print(f"DEBUG: sport data_parts: {data_parts}")
             date_str = data_parts[0]
             time_slot = data_parts[1]
             sport_type = data_parts[2]
@@ -966,31 +1549,33 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text(
                     "❌ Это время только что заняли!\nВыберите другое время.",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔙 Выбрать другое время", callback_data=f"date_{date_str}")]
+                        [InlineKeyboardButton("🔙 Назад к расписанию", callback_data=f"week_0")]
                     ])
                 )
 
         elif query.data.startswith("confirm_"):
+            print("DEBUG: Processing confirm_ button")
             data_parts = query.data.replace("confirm_", "").split("_")
+            print(f"DEBUG: confirm data_parts: {data_parts}")
             date_str = data_parts[0]
             time_slot = data_parts[1]
             sport_type = data_parts[2]
 
             if is_slot_available(date_str, time_slot):
-                await finalize_booking(query, user_id, user_name, date_str, time_slot, sport_type)
+                await finalize_booking(query, user_id, user_name, date_str, time_slot, sport_type, context)
             else:
                 await query.edit_message_text(
                     "❌ Это время только что заняли!\nВыберите другое время.",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔙 Выбрать другое время", callback_data=f"date_{date_str}")]
+                        [InlineKeyboardButton("🔙 Назад к расписанию", callback_data=f"week_0")]
                     ])
                 )
 
-        elif query.data == "my_bookings":
-            await show_user_bookings(query, user_id)
-
-        elif query.data == "rules":
-            await show_rules(query)
+        elif query.data.startswith("cancel_"):
+            print("DEBUG: Processing cancel_ button")
+            # Обработка отмены конкретной брони
+            booking_id = query.data.replace("cancel_", "")
+            await cancel_specific_booking(query, user_id, booking_id, context)
 
         else:
             print(f"DEBUG: Unknown button: {query.data}")
@@ -998,6 +1583,9 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         print(f"ERROR in handle_button: {e}")
+        import traceback
+        print("FULL TRACEBACK:")
+        traceback.print_exc()
         # Пытаемся ответить на запрос, если он еще валиден
         try:
             await query.answer("❌ Произошла ошибка, попробуйте еще раз")
@@ -1005,30 +1593,122 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass  # Игнорируем ошибку, если запрос уже невалиден
 
 
-def main():
-    print("🔄 Запуск бота...")
-    print(f"📊 Загружено пользователей с бронями: {len(bookings)}")
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Простой обработчик ошибок"""
+    logging.error(f"Exception while handling an update: {context.error}")
 
+
+def main():
+    """Основная функция запуска бота"""
+    print("=" * 50)
+    print(f"🚀 ЗАПУСК БОТА - {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 50)
+
+    # Загружаем данные
+    load_data()
+
+    print(f"📊 Загружено пользователей с бронями: {len(bookings)}")
     total_bookings = sum(len(user_bookings) for user_bookings in bookings.values())
     print(f"📊 Всего броней: {total_bookings}")
     print(f"📊 Занятых слотов: {len(occupied_slots)}")
 
-    application = Application.builder().token(TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(handle_button))
+    try:
+        # Создаем Application
+        global application
+        application = (
+            Application.builder()
+            .token(TOKEN)
+            .pool_timeout(30)
+            .read_timeout(30)
+            .write_timeout(30)
+            .connect_timeout(30)
+            .build()
+        )
 
-    # Добавляем обработчик ошибок
-    application.add_error_handler(error_handler)
+        # Добавляем обработчики команд
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("myid", get_my_id))
+        application.add_handler(CommandHandler("test_notify", test_notify))
 
-    print("✅ Бот запущен! Для остановки нажмите Ctrl+C")
-    application.run_polling()
+        # Обработчики callback кнопок
+        application.add_handler(CallbackQueryHandler(handle_button))
+
+        # Обработчик ошибок
+        application.add_error_handler(error_handler)
+
+        print("✅ Бот инициализирован!")
+
+        # Запускаем polling локально или webhook на Render
+        if os.getenv('RENDER'):
+            print("🌐 Режим: Webhook (Render)")
+            # На Render бот будет запущен через Flask
+        else:
+            print("🔄 Режим: Polling (локально)")
+            application.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True
+            )
+
+    except KeyboardInterrupt:
+        print("\n🛑 Бот остановлен пользователем")
+    except Exception as e:
+        print(f"❌ Критическая ошибка: {e}")
 
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает ошибки"""
-    print(f"Exception while handling an update: {context.error}")
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Обработчик webhook от Telegram"""
+    if application is None:
+        return jsonify({"status": "error", "message": "Bot not initialized"}), 500
 
+    try:
+        update = Update.de_json(request.get_json(force=True), application.bot)
+
+        # Создаем контекст для обработки
+        async def process_update():
+            await application.process_update(update)
+
+        # Запускаем обработку асинхронно
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(process_update())
+
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/')
+def home():
+    return "🤖 Sport Bot is running on Render!"
+
+
+@app.route('/health')
+def health():
+    return "OK", 200
+
+
+@app.route('/set_webhook')
+def set_webhook():
+    """Установка webhook"""
+    try:
+        webhook_url = f"https://{request.host}/webhook"
+        result = application.bot.set_webhook(webhook_url)
+        return f"Webhook set to: {webhook_url}<br>Result: {result}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@app.route('/get_webhook_info')
+def get_webhook_info():
+    """Получение информации о webhook"""
+    try:
+        info = application.bot.get_webhook_info()
+        return f"Webhook info: {info}"
+    except Exception as e:
+        return f"Error: {e}"
 
 if __name__ == "__main__":
-
     main()
